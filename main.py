@@ -151,17 +151,19 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     
     if args.mode == 'train':
+        # Configure loss function
         loss_fn = torch.nn.MSELoss()
         
+        # Configure optimizer with learning rate scheduler
         optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, 
             mode='min', 
             factor=0.5, 
-            patience=args.patience // 2,
-            
+            patience=args.patience // 2
         )
         
+        # Create trainer with enhanced configuration
         trainer = ModelTrainer(
             model=model,
             optimizer=optimizer,
@@ -170,11 +172,13 @@ def main():
             checkpoint_dir='checkpoints'
         )
         
+        # Check for existing checkpoint to resume training
         checkpoint_path = os.path.join('checkpoints', f'{args.model_type}_latest.pt')
         if os.path.exists(checkpoint_path):
             logging.info(f"Resuming training from checkpoint: {checkpoint_path}")
             trainer.load_checkpoint(checkpoint_path)
         
+        # Train model with enhanced monitoring
         logging.info(f"Training {args.model_type.upper()} model with {input_dim} input features...")
         logging.info(f"Training set size: {len(X_train)}, Validation set size: {len(X_val)}")
         
@@ -187,21 +191,24 @@ def main():
             epochs=args.epochs,
             batch_size=args.batch_size,
             patience=args.patience,
-            ,
-            save_best_only=True,
-            scheduler=scheduler
+            verbose=True,
+            save_best_only=True
         )
         training_time = datetime.now() - start_time
         
+        # Log training results
         logging.info(f"Training completed in {training_time}")
         logging.info(f"Best validation loss: {min(history['val_loss']):.6f}")
         logging.info(f"Final training loss: {history['train_loss'][-1]:.6f}")
         
+        # Save training metrics to CSV
         metrics_df = pd.DataFrame(history)
         metrics_df.to_csv(f'results/{args.model_type}_training_metrics.csv', index=False)
         
+        # Plot training history with enhanced visualization
         plt.figure(figsize=(12, 8))
         
+        # Plot loss curves
         plt.subplot(2, 1, 1)
         plt.plot(history['epoch'], history['train_loss'], 'b-', label='Training Loss')
         if 'val_loss' in history:
@@ -212,6 +219,7 @@ def main():
         plt.legend()
         plt.grid(True, alpha=0.3)
         
+        # Plot learning rate
         plt.subplot(2, 1, 2)
         plt.plot(history['epoch'], history['learning_rate'], 'g-')
         plt.xlabel('Epoch')
@@ -223,12 +231,14 @@ def main():
         plt.savefig(f'results/{args.model_type}_training_history.png', dpi=300)
         plt.close()
     
+    # Load best model for evaluation
     checkpoint_path = os.path.join('checkpoints', 'best_model.pt')
     if os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
         logging.info(f"Loaded best model from {checkpoint_path}")
     
+    # Create evaluator
     evaluator = ModelEvaluator(
         model=model,
         device=device,
@@ -236,11 +246,14 @@ def main():
     )
     
     if args.mode in ['evaluate', 'train']:
+        # Evaluate model on test set
         logging.info("Evaluating model on test set...")
         metrics = evaluator.evaluate(X_test, y_test)
         
+        # Generate predictions
         y_pred = evaluator.predict(X_test)
         
+        # Plot predictions
         evaluator.plot_predictions(
             y_true=y_test,
             y_pred=y_pred,
@@ -248,6 +261,7 @@ def main():
             save_path='results/predictions.png'
         )
         
+        # Plot returns over time
         evaluator.plot_returns_over_time(
             y_true=y_test,
             y_pred=y_pred,
@@ -255,6 +269,7 @@ def main():
             save_path='results/returns_over_time.png'
         )
         
+        # Plot cumulative returns
         evaluator.plot_cumulative_returns(
             y_true=y_test,
             y_pred=y_pred,
@@ -262,6 +277,7 @@ def main():
             save_path='results/cumulative_returns.png'
         )
         
+        # Analyze factor importance
         factor_names = [f"Factor_{i}" for i in range(X_test.shape[-1])]
         evaluator.analyze_factor_importance(
             X=X_test,
@@ -272,6 +288,7 @@ def main():
         )
     
     if args.mode == 'predict':
+        # This is a placeholder for making predictions on new data
         logging.info("Prediction mode not fully implemented yet")
 
 if __name__ == "__main__":
