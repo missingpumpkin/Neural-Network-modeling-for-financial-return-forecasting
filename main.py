@@ -11,6 +11,10 @@ from typing import Dict, List, Tuple, Optional, Union
 
 from src.data.data_loader import FinancialDataLoader
 from src.models.deep_asset_pricing import DeepFactorNetwork, LSTMFactorNetwork, TemporalFactorNetwork, HybridFactorNetwork
+from models.linear.linear_model import LinearModel
+from models.mlp.mlp_model import MLPModel
+from models.deep_mlp.deep_mlp_model import DeepMLPModel
+from models.attention.attention_model import AttentionNet
 from src.training.trainer import ModelTrainer
 from src.evaluation.evaluator import ModelEvaluator
 
@@ -47,7 +51,7 @@ def parse_args():
     
     model_group = parser.add_argument_group('Model Parameters')
     model_group.add_argument('--model_type', type=str, default='lstm',
-                        choices=['deep', 'lstm', 'temporal', 'hybrid'],
+                        choices=['linear', 'mlp', 'deep_mlp', 'attention', 'deep', 'lstm', 'temporal', 'hybrid'],
                         help='Type of model to use')
     model_group.add_argument('--hidden_dim', type=int, default=64,
                         help='Dimension of hidden layers')
@@ -103,7 +107,39 @@ def set_seed(seed: int) -> None:
 def create_model(model_type: str, input_dim: int, window_size: int, 
                 hidden_dim: int, num_layers: int, dropout_rate: float) -> torch.nn.Module:
     """Create a model based on the specified type with enhanced configuration."""
-    if model_type == 'deep':
+    if model_type == 'linear':
+        return LinearModel(
+            input_dim=input_dim,
+            output_dim=1
+        )
+    elif model_type == 'attention':
+        return AttentionNet(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            use_batch_norm=True,
+            attention_dim=32,
+            num_heads=1
+        )
+    elif model_type == 'deep_mlp':
+        return DeepMLPModel(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2, hidden_dim // 4],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            use_batch_norm=True,
+            activation='relu'
+        )
+    elif model_type == 'mlp':
+        return MLPModel(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            use_batch_norm=True
+        )
+    elif model_type == 'deep':
         return DeepFactorNetwork(
             input_dim=input_dim,
             hidden_dims=[hidden_dim, hidden_dim // 2],
@@ -183,7 +219,6 @@ def train_model(model: torch.nn.Module, data_loader: FinancialDataLoader,
     
     optimizer, scheduler = create_optimizer(model, args)
     
-    # Create trainer without unsupported parameters
     trainer = ModelTrainer(
         model=model,
         optimizer=optimizer,
@@ -201,7 +236,6 @@ def train_model(model: torch.nn.Module, data_loader: FinancialDataLoader,
     logging.info(f"Training set size: {len(data_loader.X_train)}, Validation set size: {len(data_loader.X_val)}")
     
     start_time = time.time()
-    # Remove unsupported log_interval parameter
     history = trainer.train(
         X_train=data_loader.X_train,
         y_train=data_loader.y_train,
