@@ -7,13 +7,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-# Import project modules
 from src.data.data_loader import FinancialDataLoader
 from src.models.deep_asset_pricing import DeepFactorNetwork, LSTMFactorNetwork, TemporalFactorNetwork, HybridFactorNetwork
 from src.training.trainer import ModelTrainer
 from src.evaluation.evaluator import ModelEvaluator
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -27,7 +25,6 @@ def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Deep Learning for Asset Pricing')
     
-    # Data parameters
     parser.add_argument('--tickers', type=str, default='AAPL,MSFT,GOOGL,AMZN,META',
                         help='Comma-separated list of stock tickers')
     parser.add_argument('--start_date', type=str, default='2010-01-01',
@@ -35,7 +32,6 @@ def parse_args():
     parser.add_argument('--end_date', type=str, default='2023-12-31',
                         help='End date for historical data (YYYY-MM-DD)')
     
-    # Model parameters
     parser.add_argument('--model_type', type=str, default='lstm',
                         choices=['deep', 'lstm', 'temporal', 'hybrid'],
                         help='Type of model to use')
@@ -44,7 +40,6 @@ def parse_args():
     parser.add_argument('--hidden_dim', type=int, default=64,
                         help='Dimension of hidden layers')
     
-    # Training parameters
     parser.add_argument('--epochs', type=int, default=100,
                         help='Number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=32,
@@ -54,7 +49,6 @@ def parse_args():
     parser.add_argument('--patience', type=int, default=10,
                         help='Patience for early stopping')
     
-    # Other parameters
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
     parser.add_argument('--gpu', action='store_true',
@@ -100,7 +94,6 @@ def create_model(model_type, input_dim, window_size, hidden_dim):
             dropout_rate=0.2
         )
     elif model_type == 'hybrid':
-        # Assuming half the features are temporal and half are static
         temporal_dim = input_dim // 2
         static_dim = input_dim - temporal_dim
         return HybridFactorNetwork(
@@ -117,25 +110,19 @@ def create_model(model_type, input_dim, window_size, hidden_dim):
 
 def main():
     """Main function to run the asset pricing model."""
-    # Parse arguments
     args = parse_args()
     
-    # Set random seed
     set_seed(args.seed)
     
-    # Create directories
     os.makedirs('data/cache', exist_ok=True)
     os.makedirs('checkpoints', exist_ok=True)
     os.makedirs('results', exist_ok=True)
     
-    # Set device
     device = torch.device('cuda' if torch.cuda.is_available() and args.gpu else 'cpu')
     logging.info(f"Using device: {device}")
     
-    # Parse tickers
     tickers = args.tickers.split(',')
     
-    # Create data loader
     data_loader = FinancialDataLoader(
         tickers=tickers,
         start_date=args.start_date,
@@ -143,11 +130,9 @@ def main():
         cache_dir='data/cache'
     )
     
-    # Download data
     logging.info("Downloading financial data...")
     data_loader.download_data()
     
-    # Prepare data
     logging.info("Preparing data for model...")
     X_train, y_train, X_val, y_val, X_test, y_test = data_loader.prepare_data(
         window_size=args.window_size,
@@ -157,28 +142,43 @@ def main():
         include_factors=True
     )
     
-    # Get input dimension
     input_dim = X_train.shape[-1]
     logging.info(f"Input dimension: {input_dim}")
     
-    # Create model
     logging.info(f"Creating {args.model_type} model...")
     model = create_model(args.model_type, input_dim, args.window_size, args.hidden_dim)
     
-    # Create optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     
     if args.mode == 'train':
-        # Create trainer
+        loss_fn = torch.nn.MSELoss()
+        
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, 
+            mode='min', 
+            factor=0.5, 
+            patience=args.patience // 2,
+            verbose=True
+        )
+        
         trainer = ModelTrainer(
             model=model,
             optimizer=optimizer,
+            loss_fn=loss_fn,
             device=device,
             checkpoint_dir='checkpoints'
         )
         
-        # Train model
-        logging.info("Training model...")
+        checkpoint_path = os.path.join('checkpoints', f'{args.model_type}_latest.pt')
+        if os.path.exists(checkpoint_path):
+            logging.info(f"Resuming training from checkpoint: {checkpoint_path}")
+            trainer.load_checkpoint(checkpoint_path)
+        
+        logging.info(f"Training {args.model_type.upper()} model with {input_dim} input features...")
+        logging.info(f"Training set size: {len(X_train)}, Validation set size: {len(X_val)}")
+        
+        start_time = datetime.now()
         history = trainer.train(
             X_train=X_train,
             y_train=y_train,
@@ -188,29 +188,47 @@ def main():
             batch_size=args.batch_size,
             patience=args.patience,
             verbose=True,
-            save_best_only=True
+            save_best_only=True,
+            scheduler=scheduler
         )
+        training_time = datetime.now() - start_time
         
-        # Plot training history
-        plt.figure(figsize=(10, 6))
-        plt.plot(history['epoch'], history['train_loss'], label='Train Loss')
+        logging.info(f"Training completed in {training_time}")
+        logging.info(f"Best validation loss: {min(history['val_loss']):.6f}")
+        logging.info(f"Final training loss: {history['train_loss'][-1]:.6f}")
+        
+        metrics_df = pd.DataFrame(history)
+        metrics_df.to_csv(f'results/{args.model_type}_training_metrics.csv', index=False)
+        
+        plt.figure(figsize=(12, 8))
+        
+        plt.subplot(2, 1, 1)
+        plt.plot(history['epoch'], history['train_loss'], 'b-', label='Training Loss')
         if 'val_loss' in history:
-            plt.plot(history['epoch'], history['val_loss'], label='Validation Loss')
+            plt.plot(history['epoch'], history['val_loss'], 'r-', label='Validation Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
-        plt.title('Training History')
+        plt.title(f'{args.model_type.upper()} Model Training History')
         plt.legend()
-        plt.savefig('results/training_history.png')
+        plt.grid(True, alpha=0.3)
+        
+        plt.subplot(2, 1, 2)
+        plt.plot(history['epoch'], history['learning_rate'], 'g-')
+        plt.xlabel('Epoch')
+        plt.ylabel('Learning Rate')
+        plt.title('Learning Rate Schedule')
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'results/{args.model_type}_training_history.png', dpi=300)
         plt.close()
     
-    # Load best model for evaluation
     checkpoint_path = os.path.join('checkpoints', 'best_model.pt')
     if os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
         logging.info(f"Loaded best model from {checkpoint_path}")
     
-    # Create evaluator
     evaluator = ModelEvaluator(
         model=model,
         device=device,
@@ -218,14 +236,11 @@ def main():
     )
     
     if args.mode in ['evaluate', 'train']:
-        # Evaluate model on test set
         logging.info("Evaluating model on test set...")
         metrics = evaluator.evaluate(X_test, y_test)
         
-        # Generate predictions
         y_pred = evaluator.predict(X_test)
         
-        # Plot predictions
         evaluator.plot_predictions(
             y_true=y_test,
             y_pred=y_pred,
@@ -233,7 +248,6 @@ def main():
             save_path='results/predictions.png'
         )
         
-        # Plot returns over time
         evaluator.plot_returns_over_time(
             y_true=y_test,
             y_pred=y_pred,
@@ -241,7 +255,6 @@ def main():
             save_path='results/returns_over_time.png'
         )
         
-        # Plot cumulative returns
         evaluator.plot_cumulative_returns(
             y_true=y_test,
             y_pred=y_pred,
@@ -249,8 +262,6 @@ def main():
             save_path='results/cumulative_returns.png'
         )
         
-        # Analyze factor importance
-        # This is a placeholder - in a real implementation, you would need to define factor names
         factor_names = [f"Factor_{i}" for i in range(X_test.shape[-1])]
         evaluator.analyze_factor_importance(
             X=X_test,
@@ -261,9 +272,7 @@ def main():
         )
     
     if args.mode == 'predict':
-        # This is a placeholder for making predictions on new data
         logging.info("Prediction mode not fully implemented yet")
-        # In a real implementation, you would load new data and make predictions
 
 if __name__ == "__main__":
     main()
