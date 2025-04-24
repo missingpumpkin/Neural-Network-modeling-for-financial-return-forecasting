@@ -51,7 +51,7 @@ def parse_args():
     
     model_group = parser.add_argument_group('Model Parameters')
     model_group.add_argument('--model_type', type=str, default='lstm',
-                        choices=['linear', 'mlp', 'deep_mlp', 'attention', 'deep', 'lstm', 'temporal', 'hybrid'],
+                        choices=['linear', 'mlp', 'deep_mlp', 'attention', 'gnn', 'transformer', 'deep', 'lstm', 'temporal', 'hybrid'],
                         help='Type of model to use')
     model_group.add_argument('--hidden_dim', type=int, default=64,
                         help='Dimension of hidden layers')
@@ -112,6 +112,29 @@ def create_model(model_type: str, input_dim: int, window_size: int,
             input_dim=input_dim,
             output_dim=1
         )
+    elif model_type == 'transformer':
+        return TransformerModel(
+            input_dim=input_dim,
+            d_model=hidden_dim,
+            nhead=4,
+            num_encoder_layers=2,
+            num_decoder_layers=0,
+            dim_feedforward=hidden_dim*2,
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            activation='relu',
+            use_positional_encoding=True
+        )
+    elif model_type == 'gnn':
+        return GNNModel(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            graph_type='correlation',
+            num_gnn_layers=2,
+            pooling='mean'
+        )
     elif model_type == 'attention':
         return AttentionNet(
             input_dim=input_dim,
@@ -148,7 +171,7 @@ def create_model(model_type: str, input_dim: int, window_size: int,
             use_batch_norm=True
         )
     elif model_type == 'lstm':
-        return LSTMFactorNetwork(
+        return ModelsLSTMModel(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
