@@ -143,7 +143,8 @@ class FinancialDataLoader:
                     prediction_horizon: int = 1,
                     train_ratio: float = 0.7,
                     val_ratio: float = 0.15,
-                    include_factors: bool = True) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                    include_factors: bool = True,
+                    normalize: bool = True) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Prepare data for training, validation, and testing.
         
@@ -153,6 +154,7 @@ class FinancialDataLoader:
             train_ratio: Ratio of data to use for training
             val_ratio: Ratio of data to use for validation
             include_factors: Whether to include calculated factors
+            normalize: Whether to normalize features
             
         Returns:
             Tuple of (X_train, y_train, X_val, y_val, X_test, y_test)
@@ -166,29 +168,68 @@ class FinancialDataLoader:
         
         for ticker, returns in returns_dict.items():
             if len(returns) <= window_size + prediction_horizon:
+                logging.warning(f"Ticker {ticker} has insufficient data points, skipping")
                 continue
                 
             for i in range(window_size, len(returns) - prediction_horizon):
                 features = returns[i - window_size:i].values
                 
                 if include_factors and ticker in factors_df.index:
-                    ticker_factors = factors_df.loc[ticker].values
-                    
                     features_array = np.array(features).reshape(-1, 1)  # Shape: (window_size, 1)
                     
+                    # Add static factors as columns
+                    ticker_factors = factors_df.loc[ticker].values
                     for factor_value in ticker_factors:
                         factor_column = np.full((window_size, 1), factor_value)
                         features_array = np.hstack((features_array, factor_column))
                     
-                    features = features_array  # Shape: (window_size, 1+num_factors)
+                    # Calculate additional time-series features
+                    if i >= window_size + 5:
+                        vol_5d = returns[i-5:i].std()
+                        vol_column = np.full((window_size, 1), vol_5d)
+                        features_array = np.hstack((features_array, vol_column))
+                    
+                    if i >= window_size + 10:
+                        ma_5d = returns[i-5:i].mean()
+                        ma_10d = returns[i-10:i].mean()
+                        ma_diff = ma_5d - ma_10d
+                        ma_diff_column = np.full((window_size, 1), ma_diff)
+                        features_array = np.hstack((features_array, ma_diff_column))
+                    
+                    features = features_array  # Shape: (window_size, num_features)
                 
                 target = returns.iloc[i + prediction_horizon - 1]
                 
                 X_all.append(features)
                 y_all.append(target)
         
+        if not X_all:
+            raise ValueError("No valid data samples could be created. Check your data and parameters.")
+        
         X_all = np.array(X_all)
         y_all = np.array(y_all)
+        
+        if normalize:
+            # Calculate mean and std on training data only to prevent data leakage
+            n_samples = len(X_all)
+            train_idx = int(n_samples * train_ratio)
+            
+            for i in range(X_all.shape[-1]):
+                train_data = X_all[:train_idx, :, i] if len(X_all.shape) == 3 else X_all[:train_idx, i]
+                
+                # Calculate mean and std
+                mean = np.mean(train_data)
+                std = np.std(train_data)
+                
+                if std == 0:
+                    std = 1e-8
+                
+                if len(X_all.shape) == 3:  # (samples, seq_len, features)
+                    X_all[:, :, i] = (X_all[:, :, i] - mean) / std
+                else:  # (samples, features)
+                    X_all[:, i] = (X_all[:, i] - mean) / std
+                
+                logging.info(f"Normalized feature {i}: mean={mean:.6f}, std={std:.6f}")
         
         n_samples = len(X_all)
         train_idx = int(n_samples * train_ratio)
@@ -204,5 +245,9 @@ class FinancialDataLoader:
         self.y_val = y_all[train_idx:val_idx]
         self.X_test = X_all[val_idx:]
         self.y_test = y_all[val_idx:]
+        
+        logging.info(f"Data preparation complete: {len(self.X_train)} training samples, "
+                    f"{len(self.X_val)} validation samples, {len(self.X_test)} test samples")
+        logging.info(f"Feature shape: {self.X_train.shape}")
         
         return self.X_train, self.y_train, self.X_val, self.y_val, self.X_test, self.y_test
