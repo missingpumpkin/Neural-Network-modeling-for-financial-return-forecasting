@@ -61,11 +61,15 @@ class DeepFactorNetwork(nn.Module):
         Forward pass through the network.
         
         Args:
-            x: Input tensor of shape (batch_size, input_dim)
+            x: Input tensor of shape (batch_size, seq_len, input_dim) or (batch_size, input_dim)
             
         Returns:
             Output tensor of shape (batch_size, output_dim)
         """
+        if len(x.shape) == 3:  # (batch_size, seq_len, input_dim)
+            # For BatchNorm1d, we need (batch_size, input_dim)
+            x = x[:, -1, :]  # Take the last time step
+        
         return self.model(x)
 
 
