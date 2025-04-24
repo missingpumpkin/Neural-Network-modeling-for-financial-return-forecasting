@@ -36,6 +36,7 @@ X = torch.tensor(np.array(X), dtype=torch.float32)
 y = torch.tensor(np.array(y), dtype=torch.float32).view(-1, 1)
 
 # --- 5. Define a basic neural network ---
+
 model = nn.Sequential(
     nn.Linear(window_size, 64),
     nn.ReLU(),
