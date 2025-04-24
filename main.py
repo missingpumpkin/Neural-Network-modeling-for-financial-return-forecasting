@@ -183,14 +183,13 @@ def train_model(model: torch.nn.Module, data_loader: FinancialDataLoader,
     
     optimizer, scheduler = create_optimizer(model, args)
     
+    # Create trainer without unsupported parameters
     trainer = ModelTrainer(
         model=model,
         optimizer=optimizer,
         loss_fn=loss_fn,
         device=device,
-        checkpoint_dir=args.checkpoint_dir,
-        clip_grad_value=args.clip_grad if args.clip_grad > 0 else None,
-        scheduler=scheduler
+        checkpoint_dir=args.checkpoint_dir
     )
     
     checkpoint_path = os.path.join(args.checkpoint_dir, f'{args.model_type}_latest.pt')
@@ -202,6 +201,7 @@ def train_model(model: torch.nn.Module, data_loader: FinancialDataLoader,
     logging.info(f"Training set size: {len(data_loader.X_train)}, Validation set size: {len(data_loader.X_val)}")
     
     start_time = time.time()
+    # Remove unsupported log_interval parameter
     history = trainer.train(
         X_train=data_loader.X_train,
         y_train=data_loader.y_train,
@@ -211,8 +211,7 @@ def train_model(model: torch.nn.Module, data_loader: FinancialDataLoader,
         batch_size=args.batch_size,
         patience=args.patience,
         verbose=True,
-        save_best_only=True,
-        log_interval=args.log_interval
+        save_best_only=True
     )
     training_time = time.time() - start_time
     

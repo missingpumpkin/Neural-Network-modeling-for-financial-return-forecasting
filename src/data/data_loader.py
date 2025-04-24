@@ -90,22 +90,39 @@ class FinancialDataLoader:
         returns = {}
         
         for ticker, data in self.raw_data.items():
+            if not isinstance(data, pd.DataFrame):
+                logging.warning(f"Data for {ticker} is not a DataFrame, skipping return calculation")
+                continue
+                
             if 'Close' not in data.columns:
                 logging.warning(f"Close price not found for {ticker}, skipping return calculation")
                 continue
-                
-            prices = pd.to_numeric(data['Close'], errors='coerce')
-            prices = prices.dropna()  # Remove any NaN values after conversion
             
-            if period == 'daily':
-                returns[ticker] = prices.pct_change(fill_method=None).dropna()
-            elif period == 'weekly':
-                returns[ticker] = prices.resample('W').last().pct_change(fill_method=None).dropna()
-            elif period == 'monthly':
-                returns[ticker] = prices.resample('M').last().pct_change(fill_method=None).dropna()
-            else:
-                raise ValueError(f"Unsupported period: {period}")
+            try:
+                prices = data['Close'].astype(float)
+                prices = prices.dropna()  # Remove any NaN values after conversion
+                
+                if len(prices) == 0:
+                    logging.warning(f"No valid price data for {ticker} after conversion, skipping")
+                    continue
+                
+                if period == 'daily':
+                    returns[ticker] = prices.pct_change().dropna()
+                elif period == 'weekly':
+                    returns[ticker] = prices.resample('W').last().pct_change().dropna()
+                elif period == 'monthly':
+                    returns[ticker] = prices.resample('M').last().pct_change().dropna()
+                else:
+                    raise ValueError(f"Unsupported period: {period}")
+                
+                logging.info(f"Calculated {period} returns for {ticker}: {len(returns[ticker])} data points")
+            except Exception as e:
+                logging.error(f"Error calculating returns for {ticker}: {e}")
+                continue
         
+        if not returns:
+            raise ValueError("No valid return data could be calculated for any ticker")
+            
         return returns
     
     def calculate_factors(self) -> pd.DataFrame:
