@@ -174,29 +174,30 @@ class FinancialDataLoader:
             for i in range(window_size, len(returns) - prediction_horizon):
                 features = returns[i - window_size:i].values
                 
+                features_array = np.array(features).reshape(-1, 1)  # Shape: (window_size, 1)
+                
+                # Add static factors if available
                 if include_factors and ticker in factors_df.index:
-                    features_array = np.array(features).reshape(-1, 1)  # Shape: (window_size, 1)
-                    
-                    # Add static factors as columns
                     ticker_factors = factors_df.loc[ticker].values
                     for factor_value in ticker_factors:
                         factor_column = np.full((window_size, 1), factor_value)
                         features_array = np.hstack((features_array, factor_column))
-                    
-                    # Calculate additional time-series features
-                    if i >= window_size + 5:
-                        vol_5d = returns[i-5:i].std()
-                        vol_column = np.full((window_size, 1), vol_5d)
-                        features_array = np.hstack((features_array, vol_column))
-                    
-                    if i >= window_size + 10:
-                        ma_5d = returns[i-5:i].mean()
-                        ma_10d = returns[i-10:i].mean()
-                        ma_diff = ma_5d - ma_10d
-                        ma_diff_column = np.full((window_size, 1), ma_diff)
-                        features_array = np.hstack((features_array, ma_diff_column))
-                    
-                    features = features_array  # Shape: (window_size, num_features)
+                
+                vol_5d = 0.0
+                if i >= window_size + 5:
+                    vol_5d = returns[i-5:i].std()
+                vol_column = np.full((window_size, 1), vol_5d)
+                features_array = np.hstack((features_array, vol_column))
+                
+                ma_diff = 0.0
+                if i >= window_size + 10:
+                    ma_5d = returns[i-5:i].mean()
+                    ma_10d = returns[i-10:i].mean()
+                    ma_diff = ma_5d - ma_10d
+                ma_diff_column = np.full((window_size, 1), ma_diff)
+                features_array = np.hstack((features_array, ma_diff_column))
+                
+                features = features_array  # Shape: (window_size, num_features)
                 
                 target = returns.iloc[i + prediction_horizon - 1]
                 
