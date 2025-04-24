@@ -62,6 +62,8 @@ class FinancialDataLoader:
             
             if os.path.exists(cache_file) and not force_download:
                 self.raw_data[ticker] = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                for col in self.raw_data[ticker].columns:
+                    self.raw_data[ticker][col] = pd.to_numeric(self.raw_data[ticker][col], errors='coerce')
                 logging.info(f"Loaded {ticker} data from cache")
             else:
                 try:
@@ -92,14 +94,15 @@ class FinancialDataLoader:
                 logging.warning(f"Close price not found for {ticker}, skipping return calculation")
                 continue
                 
-            prices = data['Close']
+            prices = pd.to_numeric(data['Close'], errors='coerce')
+            prices = prices.dropna()  # Remove any NaN values after conversion
             
             if period == 'daily':
-                returns[ticker] = prices.pct_change().dropna()
+                returns[ticker] = prices.pct_change(fill_method=None).dropna()
             elif period == 'weekly':
-                returns[ticker] = prices.resample('W').last().pct_change().dropna()
+                returns[ticker] = prices.resample('W').last().pct_change(fill_method=None).dropna()
             elif period == 'monthly':
-                returns[ticker] = prices.resample('M').last().pct_change().dropna()
+                returns[ticker] = prices.resample('M').last().pct_change(fill_method=None).dropna()
             else:
                 raise ValueError(f"Unsupported period: {period}")
         
