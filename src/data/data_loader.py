@@ -169,16 +169,15 @@ class FinancialDataLoader:
                 features = returns[i - window_size:i].values
                 
                 if include_factors and ticker in factors_df.index:
-                    ticker_factors = np.array(factors_df.loc[ticker].values)
+                    ticker_factors = factors_df.loc[ticker].values
                     
-                    features_list = [features]
+                    features_array = np.array(features).reshape(-1, 1)  # Shape: (window_size, 1)
                     
-                    for factor_idx in range(len(ticker_factors)):
-                        factor_value = ticker_factors[factor_idx]
-                        factor_column = np.full(window_size, factor_value)
-                        features_list.append(factor_column)
+                    for factor_value in ticker_factors:
+                        factor_column = np.full((window_size, 1), factor_value)
+                        features_array = np.hstack((features_array, factor_column))
                     
-                    features = np.array(features_list).T
+                    features = features_array  # Shape: (window_size, 1+num_factors)
                 
                 target = returns.iloc[i + prediction_horizon - 1]
                 
