@@ -159,7 +159,7 @@ def main():
             mode='min', 
             factor=0.5, 
             patience=args.patience // 2,
-            verbose=True
+            
         )
         
         trainer = ModelTrainer(
@@ -187,7 +187,7 @@ def main():
             epochs=args.epochs,
             batch_size=args.batch_size,
             patience=args.patience,
-            verbose=True,
+            ,
             save_best_only=True,
             scheduler=scheduler
         )
