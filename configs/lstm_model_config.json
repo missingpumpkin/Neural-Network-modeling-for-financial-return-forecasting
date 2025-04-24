@@ -1,0 +1,28 @@
+{
+    "model_type": "lstm",
+    "input_dim": "auto",
+    "hidden_dim": 64,
+    "num_layers": 2,
+    "output_dim": 1,
+    "dropout_rate": 0.3,
+    "bidirectional": false,
+    "use_attention": true,
+    "training": {
+        "epochs": 200,
+        "batch_size": 32,
+        "learning_rate": 0.0005,
+        "weight_decay": 0.0002,
+        "early_stopping_patience": 20
+    },
+    "data": {
+        "window_size": 20,
+        "prediction_horizon": 1,
+        "train_ratio": 0.7,
+        "val_ratio": 0.15,
+        "normalize": true
+    },
+    "evaluation": {
+        "metrics": ["mse", "rmse", "mae", "r2", "directional_accuracy", "information_coefficient", "sharpe_ratio"],
+        "visualizations": ["predictions", "returns_over_time", "cumulative_returns", "feature_importance", "attention_weights"]
+    }
+}

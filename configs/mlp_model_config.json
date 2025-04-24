@@ -1,0 +1,26 @@
+{
+    "model_type": "mlp",
+    "input_dim": "auto",
+    "hidden_dims": [64, 32],
+    "output_dim": 1,
+    "dropout_rate": 0.2,
+    "use_batch_norm": true,
+    "training": {
+        "epochs": 150,
+        "batch_size": 64,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0001,
+        "early_stopping_patience": 15
+    },
+    "data": {
+        "window_size": 20,
+        "prediction_horizon": 1,
+        "train_ratio": 0.7,
+        "val_ratio": 0.15,
+        "normalize": true
+    },
+    "evaluation": {
+        "metrics": ["mse", "rmse", "mae", "r2", "directional_accuracy", "information_coefficient", "sharpe_ratio"],
+        "visualizations": ["predictions", "returns_over_time", "cumulative_returns", "feature_importance"]
+    }
+}

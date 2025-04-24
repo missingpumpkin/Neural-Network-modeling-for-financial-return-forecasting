@@ -1,59 +1,473 @@
-import yfinance as yf
-import pandas as pd
+import os
+import argparse
+import logging
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
+import time
+from typing import Dict, List, Tuple, Optional, Union
 
-# --- 1. Download data ---
-ticker = "AAPL"
-raw_data = yf.download(ticker, start="2015-01-01", end="2023-12-31")
-data = raw_data.copy()
+from src.data.data_loader import FinancialDataLoader
+from src.models.deep_asset_pricing import DeepFactorNetwork, LSTMFactorNetwork, TemporalFactorNetwork, HybridFactorNetwork
+from models.linear.linear_model import LinearModel
+from models.mlp.mlp_model import MLPModel
+from models.deep_mlp.deep_mlp_model import DeepMLPModel
+from models.attention.attention_model import AttentionNet
+from src.training.trainer import ModelTrainer
+from src.evaluation.evaluator import ModelEvaluator
 
-# --- 2. Flatten MultiIndex if needed ---
-if isinstance(data.columns, pd.MultiIndex):
-    data.columns = ['_'.join(col).strip() for col in data.columns.values]
-
-print("Flattened columns:", data.columns)
-
-# --- 3. Extract 'Close' column safely ---
-close_col = f"{ticker}_Close"
-if close_col not in data.columns:
-    raise ValueError(f"Column '{close_col}' not found in flattened data.")
-
-prices = data[close_col]
-returns = prices.pct_change().dropna()
-
-# --- 4. Create sliding window features ---
-window_size = 10
-X, y = [], []
-
-for i in range(window_size, len(returns)):
-    X.append(returns[i - window_size:i].values)
-    y.append(returns[i])
-
-X = torch.tensor(np.array(X), dtype=torch.float32)
-y = torch.tensor(np.array(y), dtype=torch.float32).view(-1, 1)
-
-# --- 5. Define a basic neural network ---
-model = nn.Sequential(
-    nn.Linear(window_size, 64),
-    nn.ReLU(),
-    nn.Linear(64, 1)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("asset_pricing_model.log"),
+        logging.StreamHandler()
+    ]
 )
 
-loss_fn = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+def parse_args():
+    """Parse command line arguments with enhanced options."""
+    parser = argparse.ArgumentParser(description='Deep Learning for Asset Pricing')
+    
+    data_group = parser.add_argument_group('Data Parameters')
+    data_group.add_argument('--tickers', type=str, default='AAPL,MSFT,GOOGL,AMZN,META',
+                        help='Comma-separated list of stock tickers')
+    data_group.add_argument('--start_date', type=str, default='2010-01-01',
+                        help='Start date for historical data (YYYY-MM-DD)')
+    data_group.add_argument('--end_date', type=str, default='2023-12-31',
+                        help='End date for historical data (YYYY-MM-DD)')
+    data_group.add_argument('--window_size', type=int, default=20,
+                        help='Number of time steps to use as input features')
+    data_group.add_argument('--prediction_horizon', type=int, default=1,
+                        help='Number of time steps ahead to predict')
+    data_group.add_argument('--train_ratio', type=float, default=0.7,
+                        help='Ratio of data to use for training')
+    data_group.add_argument('--val_ratio', type=float, default=0.15,
+                        help='Ratio of data to use for validation')
+    data_group.add_argument('--normalize', action='store_true', default=True,
+                        help='Whether to normalize features')
+    
+    model_group = parser.add_argument_group('Model Parameters')
+    model_group.add_argument('--model_type', type=str, default='lstm',
+                        choices=['linear', 'mlp', 'deep_mlp', 'attention', 'gnn', 'transformer', 'deep', 'lstm', 'temporal', 'hybrid'],
+                        help='Type of model to use')
+    model_group.add_argument('--hidden_dim', type=int, default=64,
+                        help='Dimension of hidden layers')
+    model_group.add_argument('--num_layers', type=int, default=2,
+                        help='Number of layers in LSTM/Hybrid models')
+    model_group.add_argument('--dropout_rate', type=float, default=0.2,
+                        help='Dropout rate for regularization')
+    
+    train_group = parser.add_argument_group('Training Parameters')
+    train_group.add_argument('--epochs', type=int, default=100,
+                        help='Number of epochs to train')
+    train_group.add_argument('--batch_size', type=int, default=32,
+                        help='Batch size for training')
+    train_group.add_argument('--learning_rate', type=float, default=0.001,
+                        help='Learning rate for optimizer')
+    train_group.add_argument('--weight_decay', type=float, default=1e-5,
+                        help='Weight decay for regularization')
+    train_group.add_argument('--patience', type=int, default=10,
+                        help='Patience for early stopping')
+    train_group.add_argument('--clip_grad', type=float, default=1.0,
+                        help='Gradient clipping value (0 to disable)')
+    train_group.add_argument('--scheduler', type=str, default='plateau',
+                        choices=['plateau', 'cosine', 'step', 'none'],
+                        help='Learning rate scheduler type')
+    
+    sys_group = parser.add_argument_group('System Parameters')
+    sys_group.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducibility')
+    sys_group.add_argument('--gpu', action='store_true',
+                        help='Use GPU for training if available')
+    sys_group.add_argument('--mode', type=str, default='train',
+                        choices=['train', 'evaluate', 'predict', 'hyperopt'],
+                        help='Mode to run the script in')
+    sys_group.add_argument('--log_interval', type=int, default=10,
+                        help='Interval for logging training progress')
+    sys_group.add_argument('--checkpoint_dir', type=str, default='checkpoints',
+                        help='Directory to save model checkpoints')
+    sys_group.add_argument('--results_dir', type=str, default='results',
+                        help='Directory to save results')
+    
+    return parser.parse_args()
 
-# --- 6. Train the model ---
-epochs = 100
-for epoch in range(epochs):
-    model.train()
-    optimizer.zero_grad()
-    y_pred = model(X)
-    loss = loss_fn(y_pred, y)
-    loss.backward()
-    optimizer.step()
+def set_seed(seed: int) -> None:
+    """Set random seed for reproducibility across all libraries."""
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
-    if epoch % 10 == 0:
-        print(f"Epoch {epoch:3d}: Loss = {loss.item():.6f}")
+def create_model(model_type: str, input_dim: int, window_size: int, 
+                hidden_dim: int, num_layers: int, dropout_rate: float) -> torch.nn.Module:
+    """Create a model based on the specified type with enhanced configuration."""
+    if model_type == 'linear':
+        return LinearModel(
+            input_dim=input_dim,
+            output_dim=1
+        )
+    elif model_type == 'transformer':
+        return TransformerModel(
+            input_dim=input_dim,
+            d_model=hidden_dim,
+            nhead=4,
+            num_encoder_layers=2,
+            num_decoder_layers=0,
+            dim_feedforward=hidden_dim*2,
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            activation='relu',
+            use_positional_encoding=True
+        )
+    elif model_type == 'gnn':
+        return GNNModel(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            graph_type='correlation',
+            num_gnn_layers=2,
+            pooling='mean'
+        )
+    elif model_type == 'attention':
+        return AttentionNet(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            use_batch_norm=True,
+            attention_dim=32,
+            num_heads=1
+        )
+    elif model_type == 'deep_mlp':
+        return DeepMLPModel(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2, hidden_dim // 4],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            use_batch_norm=True,
+            activation='relu'
+        )
+    elif model_type == 'mlp':
+        return MLPModel(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            use_batch_norm=True
+        )
+    elif model_type == 'deep':
+        return DeepFactorNetwork(
+            input_dim=input_dim,
+            hidden_dims=[hidden_dim, hidden_dim // 2],
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            use_batch_norm=True
+        )
+    elif model_type == 'lstm':
+        return ModelsLSTMModel(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            output_dim=1,
+            dropout_rate=dropout_rate,
+            bidirectional=False
+        )
+    elif model_type == 'temporal':
+        return TemporalFactorNetwork(
+            input_dim=input_dim,
+            seq_len=window_size,
+            num_filters=[64, 128, 64],
+            kernel_sizes=[3, 3, 3],
+            output_dim=1,
+            dropout_rate=dropout_rate
+        )
+    elif model_type == 'hybrid':
+        temporal_dim = input_dim // 2
+        static_dim = input_dim - temporal_dim
+        return HybridFactorNetwork(
+            temporal_input_dim=temporal_dim,
+            static_input_dim=static_dim,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            fc_dims=[32, 16],
+            output_dim=1,
+            dropout_rate=dropout_rate
+        )
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+
+def create_optimizer(model: torch.nn.Module, args: argparse.Namespace) -> Tuple[torch.optim.Optimizer, Optional[torch.optim.lr_scheduler._LRScheduler]]:
+    """Create optimizer and learning rate scheduler with enhanced options."""
+    optimizer = torch.optim.Adam(
+        model.parameters(), 
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay
+    )
+    
+    if args.scheduler == 'plateau':
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, 
+            mode='min', 
+            factor=0.5, 
+            patience=args.patience // 2
+        )
+    elif args.scheduler == 'cosine':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=args.epochs,
+            eta_min=args.learning_rate / 10
+        )
+    elif args.scheduler == 'step':
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=args.patience,
+            gamma=0.5
+        )
+    else:  # 'none'
+        scheduler = None
+    
+    return optimizer, scheduler
+
+def train_model(model: torch.nn.Module, data_loader: FinancialDataLoader, 
+               args: argparse.Namespace, device: torch.device) -> Dict:
+    """Train the model with enhanced monitoring and features."""
+    loss_fn = torch.nn.MSELoss()
+    
+    optimizer, scheduler = create_optimizer(model, args)
+    
+    trainer = ModelTrainer(
+        model=model,
+        optimizer=optimizer,
+        loss_fn=loss_fn,
+        device=device,
+        checkpoint_dir=args.checkpoint_dir
+    )
+    
+    checkpoint_path = os.path.join(args.checkpoint_dir, f'{args.model_type}_latest.pt')
+    if os.path.exists(checkpoint_path):
+        logging.info(f"Resuming training from checkpoint: {checkpoint_path}")
+        trainer.load_checkpoint(checkpoint_path)
+    
+    logging.info(f"Training {args.model_type.upper()} model with {data_loader.X_train.shape[-1]} input features...")
+    logging.info(f"Training set size: {len(data_loader.X_train)}, Validation set size: {len(data_loader.X_val)}")
+    
+    start_time = time.time()
+    history = trainer.train(
+        X_train=data_loader.X_train,
+        y_train=data_loader.y_train,
+        X_val=data_loader.X_val,
+        y_val=data_loader.y_val,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        patience=args.patience,
+        verbose=True,
+        save_best_only=True
+    )
+    training_time = time.time() - start_time
+    
+    logging.info(f"Training completed in {training_time:.2f} seconds")
+    logging.info(f"Best validation loss: {min(history['val_loss']):.6f}")
+    logging.info(f"Final training loss: {history['train_loss'][-1]:.6f}")
+    
+    metrics_df = pd.DataFrame(history)
+    metrics_df.to_csv(f'{args.results_dir}/{args.model_type}_training_metrics.csv', index=False)
+    
+    visualize_training_history(history, args)
+    
+    return history
+
+def visualize_training_history(history: Dict, args: argparse.Namespace) -> None:
+    """Create enhanced visualizations of training history."""
+    plt.figure(figsize=(12, 10))
+    
+    plt.subplot(3, 1, 1)
+    plt.plot(history['epoch'], history['train_loss'], 'b-', label='Training Loss')
+    if 'val_loss' in history:
+        plt.plot(history['epoch'], history['val_loss'], 'r-', label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title(f'{args.model_type.upper()} Model Training History')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.subplot(3, 1, 2)
+    plt.plot(history['epoch'], history['learning_rate'], 'g-')
+    plt.xlabel('Epoch')
+    plt.ylabel('Learning Rate')
+    plt.title('Learning Rate Schedule')
+    plt.grid(True, alpha=0.3)
+    
+    if 'epoch_time' in history:
+        plt.subplot(3, 1, 3)
+        plt.plot(history['epoch'], history['epoch_time'], 'm-')
+        plt.xlabel('Epoch')
+        plt.ylabel('Time (seconds)')
+        plt.title('Training Time per Epoch')
+        plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(f'{args.results_dir}/{args.model_type}_training_history.png', dpi=300)
+    plt.close()
+
+def evaluate_model(model: torch.nn.Module, data_loader: FinancialDataLoader, 
+                  args: argparse.Namespace, device: torch.device) -> Dict:
+    """Evaluate the model with enhanced metrics and visualizations."""
+    evaluator = ModelEvaluator(
+        model=model,
+        device=device,
+        results_dir=args.results_dir
+    )
+    
+    logging.info("Evaluating model on test set...")
+    metrics = evaluator.evaluate(data_loader.X_test, data_loader.y_test)
+    
+    y_pred = evaluator.predict(data_loader.X_test)
+    
+    evaluator.plot_predictions(
+        y_true=data_loader.y_test,
+        y_pred=y_pred,
+        title=f"{args.model_type.capitalize()} Model: Actual vs Predicted Returns",
+        save_path=f'{args.results_dir}/{args.model_type}_predictions.png'
+    )
+    
+    evaluator.plot_returns_over_time(
+        y_true=data_loader.y_test,
+        y_pred=y_pred,
+        title=f"{args.model_type.capitalize()} Model: Returns Over Time",
+        save_path=f'{args.results_dir}/{args.model_type}_returns_over_time.png'
+    )
+    
+    evaluator.plot_cumulative_returns(
+        y_true=data_loader.y_test,
+        y_pred=y_pred,
+        title=f"{args.model_type.capitalize()} Model: Cumulative Returns",
+        save_path=f'{args.results_dir}/{args.model_type}_cumulative_returns.png'
+    )
+    
+    factor_names = [f"Factor_{i}" for i in range(data_loader.X_test.shape[-1])]
+    evaluator.analyze_factor_importance(
+        X=data_loader.X_test,
+        y_true=data_loader.y_test,
+        factor_names=factor_names,
+        title=f"{args.model_type.capitalize()} Model: Factor Importance",
+        save_path=f'{args.results_dir}/{args.model_type}_factor_importance.png'
+    )
+    
+    return metrics
+
+def predict_with_model(model: torch.nn.Module, data_loader: FinancialDataLoader, 
+                      args: argparse.Namespace, device: torch.device) -> np.ndarray:
+    """Generate predictions using the trained model."""
+    evaluator = ModelEvaluator(
+        model=model,
+        device=device,
+        results_dir=args.results_dir
+    )
+    
+    logging.info("Generating predictions...")
+    y_pred = evaluator.predict(data_loader.X_test)
+    
+    pred_df = pd.DataFrame({
+        'actual': data_loader.y_test,
+        'predicted': y_pred.flatten()
+    })
+    pred_df.to_csv(f'{args.results_dir}/{args.model_type}_predictions.csv', index=False)
+    
+    return y_pred
+
+def main():
+    """Main function to run the asset pricing model with enhanced organization."""
+    args = parse_args()
+    
+    set_seed(args.seed)
+    
+    os.makedirs('data/cache', exist_ok=True)
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    os.makedirs(args.results_dir, exist_ok=True)
+    
+    device = torch.device('cuda' if torch.cuda.is_available() and args.gpu else 'cpu')
+    logging.info(f"Using device: {device}")
+    
+    tickers = args.tickers.split(',')
+    
+    data_loader = FinancialDataLoader(
+        tickers=tickers,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        cache_dir='data/cache'
+    )
+    
+    logging.info("Downloading financial data...")
+    data_loader.download_data()
+    
+    logging.info("Preparing data for model...")
+    data_loader.prepare_data(
+        window_size=args.window_size,
+        prediction_horizon=args.prediction_horizon,
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio,
+        include_factors=True,
+        normalize=args.normalize
+    )
+    
+    input_dim = data_loader.X_train.shape[-1]
+    logging.info(f"Input dimension: {input_dim}")
+    
+    logging.info(f"Creating {args.model_type} model...")
+    model = create_model(
+        model_type=args.model_type, 
+        input_dim=input_dim, 
+        window_size=args.window_size, 
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        dropout_rate=args.dropout_rate
+    )
+    model.to(device)
+    
+    if args.mode == 'train':
+        history = train_model(model, data_loader, args, device)
+        
+        best_checkpoint_path = os.path.join(args.checkpoint_dir, 'best_model.pt')
+        if os.path.exists(best_checkpoint_path):
+            checkpoint = torch.load(best_checkpoint_path, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            logging.info(f"Loaded best model from {best_checkpoint_path}")
+        
+        metrics = evaluate_model(model, data_loader, args, device)
+        
+    elif args.mode == 'evaluate':
+        best_checkpoint_path = os.path.join(args.checkpoint_dir, 'best_model.pt')
+        if os.path.exists(best_checkpoint_path):
+            checkpoint = torch.load(best_checkpoint_path, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            logging.info(f"Loaded best model from {best_checkpoint_path}")
+        else:
+            logging.warning("No checkpoint found. Using untrained model for evaluation.")
+        
+        metrics = evaluate_model(model, data_loader, args, device)
+        
+    elif args.mode == 'predict':
+        best_checkpoint_path = os.path.join(args.checkpoint_dir, 'best_model.pt')
+        if os.path.exists(best_checkpoint_path):
+            checkpoint = torch.load(best_checkpoint_path, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            logging.info(f"Loaded best model from {best_checkpoint_path}")
+        else:
+            logging.warning("No checkpoint found. Using untrained model for prediction.")
+        
+        y_pred = predict_with_model(model, data_loader, args, device)
+        
+    elif args.mode == 'hyperopt':
+        logging.info("Hyperparameter optimization mode not fully implemented yet")
+    
+    logging.info("Process completed successfully")
+
+if __name__ == "__main__":
+    main()
