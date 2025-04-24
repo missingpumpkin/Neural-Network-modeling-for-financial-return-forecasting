@@ -125,11 +125,14 @@ class LSTMFactorNetwork(nn.Module):
         Forward pass through the network.
         
         Args:
-            x: Input tensor of shape (batch_size, seq_len, input_dim)
+            x: Input tensor of shape (batch_size, seq_len, input_dim) or (batch_size, input_dim)
             
         Returns:
             Output tensor of shape (batch_size, output_dim)
         """
+        if len(x.shape) == 2:  # (batch_size, input_dim)
+            x = x.unsqueeze(1)  # Add sequence dimension: (batch_size, 1, input_dim)
+        
         lstm_out, _ = self.lstm(x)
         
         lstm_out = lstm_out[:, -1, :]
